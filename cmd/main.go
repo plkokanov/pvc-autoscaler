@@ -14,19 +14,19 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	"github.com/gardener/pvc-autoscaler/internal/controller/pva"
+	"github.com/gardener/pvc-autoscaler/internal/input"
+	"github.com/gardener/pvc-autoscaler/internal/metrics"
 	_ "github.com/gardener/pvc-autoscaler/internal/metrics"
 
 	v1alpha1 "github.com/gardener/pvc-autoscaler/api/autoscaling/v1alpha1"
 	"github.com/gardener/pvc-autoscaler/internal/common"
-	controller "github.com/gardener/pvc-autoscaler/internal/controller/autoscaling"
 	"github.com/gardener/pvc-autoscaler/internal/metrics/source/prometheus"
-	"github.com/gardener/pvc-autoscaler/internal/periodic"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -124,7 +124,7 @@ func main() {
 	}
 
 	ctx := ctrl.SetupSignalHandler()
-	eventCh := make(chan event.GenericEvent)
+	//eventCh := make(chan event.GenericEvent)
 
 	// The source for metrics we use
 	metricsSource, err := prometheus.New(
@@ -135,41 +135,68 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Add the periodic runner
-	runner, err := periodic.New(
-		periodic.WithClient(mgr.GetClient()),
-		periodic.WithInterval(interval),
-		periodic.WithEventChannel(eventCh),
-		periodic.WithMetricsSource(metricsSource),
-		periodic.WithEventRecorder(mgr.GetEventRecorderFor(common.ControllerName)),
-	)
+	metricsStorage := metrics.NewStorage()
 
+	metricsStorageRunner, err := input.New(
+		input.WithInterval(30*time.Second),
+		input.WithMetricsSource(metricsSource),
+		input.WithMetricsStorage(metricsStorage),
+	)
 	if err != nil {
 		setupLog.Error(err, "unable to create periodic runner", "controller", common.ControllerName)
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(runner); err != nil {
+	if err := mgr.Add(metricsStorageRunner); err != nil {
 		setupLog.Error(err, "unable to add periodic runner to manager", "controller", common.ControllerName)
 		os.Exit(1)
 	}
 
-	// And create our controller
-	reconciler, err := controller.New(
-		controller.WithClient(mgr.GetClient()),
-		controller.WithScheme(mgr.GetScheme()),
-		controller.WithEventChannel(eventCh),
-		controller.WithEventRecorder(mgr.GetEventRecorderFor(common.ControllerName)),
-	)
-	if err != nil {
-		setupLog.Error(err, "unable to create reconciler", "controller", common.ControllerName)
+	// // Add the periodic runner
+	// runner, err := periodic.New(
+	// 	periodic.WithClient(mgr.GetClient()),
+	// 	periodic.WithInterval(interval),
+	// 	periodic.WithEventChannel(eventCh),
+	// 	periodic.WithMetricsSource(metricsSource),
+	// 	periodic.WithEventRecorder(mgr.GetEventRecorderFor(common.ControllerName)),
+	// )
+
+	// if err != nil {
+	// 	setupLog.Error(err, "unable to create periodic runner", "controller", common.ControllerName)
+	// 	os.Exit(1)
+	// }
+
+	// if err := mgr.Add(runner); err != nil {
+	// 	setupLog.Error(err, "unable to add periodic runner to manager", "controller", common.ControllerName)
+	// 	os.Exit(1)
+	// }
+
+	if err := (&pva.Reconciler{
+		Client:         mgr.GetClient(),
+		EventRecorder:  mgr.GetEventRecorderFor(common.ControllerName),
+		ResyncPeriod:   10 * time.Second,
+		MetricsStorage: metricsStorage,
+	}).AddToManager(mgr); err != nil {
+		setupLog.Error(err, "unable to add reconciler to manager")
 		os.Exit(1)
 	}
 
-	if err := reconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", common.ControllerName)
-		os.Exit(1)
-	}
+	// // And create our controller
+	// reconciler, err := controller.New(
+	// 	controller.WithClient(mgr.GetClient()),
+	// 	controller.WithScheme(mgr.GetScheme()),
+	// 	controller.WithEventChannel(eventCh),
+	// 	controller.WithEventRecorder(mgr.GetEventRecorderFor(common.ControllerName)),
+	// )
+	// if err != nil {
+	// 	setupLog.Error(err, "unable to create reconciler", "controller", common.ControllerName)
+	// 	os.Exit(1)
+	// }
+
+	// if err := reconciler.SetupWithManager(mgr); err != nil {
+	// 	setupLog.Error(err, "unable to create controller", "controller", common.ControllerName)
+	// 	os.Exit(1)
+	// }
 
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		if err = (&v1alpha1.PersistentVolumeClaimAutoscaler{}).SetupWebhookWithManager(mgr); err != nil {
