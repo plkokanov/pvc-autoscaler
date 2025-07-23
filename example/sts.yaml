@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: test-sts
+  namespace: default
+spec:
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Delete
+    whenScaled: Delete
+  podManagementPolicy: Parallel
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: pvc-autoscaler-test
+      app.kubernetes.io/name: test
+  serviceName: test-sts
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: alertmanager
+      labels:
+        app.kubernetes.io/instance: pvc-autoscaler-test
+        app.kubernetes.io/name: test
+    spec:
+      containers:
+      - command:
+        - "sleep"
+        - "infinity"
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: status.podIP
+        image: ubuntu:latest
+        imagePullPolicy: IfNotPresent
+        name: ubuntu
+        volumeMounts:
+        - mountPath: /test-data-lvm
+          name: data-lvm
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext:
+        fsGroup: 2000
+        runAsNonRoot: true
+        runAsUser: 1000
+  updateStrategy:
+    type: RollingUpdate
+  volumeClaimTemplates:
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: data-lvm
+    spec:
+      storageClassName: openebs-lvm
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 128Mi
+      volumeMode: Filesystem
