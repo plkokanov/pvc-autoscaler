@@ -36,7 +36,7 @@ type PersistentVolumeAutoscalerSpec struct {
 
 type PersistentVolumeAutoscalerStatus struct {
 	// PVCs specifies is the status of all PVCs autoscaled by this controller.
-	PVCs []PersistentVolumeClaimStatus
+	PVCs []PersistentVolumeClaimStatus `json:"pvcs,omitempty"`
 }
 
 // PersistentVolumeClaimStatus defines the observed state of scaling a
@@ -82,7 +82,7 @@ type PersistentVolumeClaimStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:shortName=pvca
+// +kubebuilder:resource:shortName=pva
 // +kubebuilder:printcolumn:name="Target",type=string,JSONPath=`.spec.scaleTargetRef.name`
 // +kubebuilder:printcolumn:name="Increase By",type=string,JSONPath=`.spec.increaseBy`
 // +kubebuilder:printcolumn:name="Threshold",type=string,JSONPath=`.spec.threshold`

@@ -15,6 +15,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -50,6 +51,15 @@ var ErrStorageClassDoesNotSupportExpansion = errors.New("storage class does not 
 // configured configured without a Kubernetes API client.
 var ErrNoClient = errors.New("no client provided")
 
+// +kubebuilder:rbac:groups=autoscaling.gardener.cloud,resources=persistentvolumeautoscalers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=autoscaling.gardener.cloud,resources=persistentvolumeautoscalers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=autoscaling.gardener.cloud,resources=persistentvolumeautoscalers/finalizers,verbs=update
+//+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims/status,verbs=get
+//+kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
+//+kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
+
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("pva", req.NamespacedName)
 
@@ -67,7 +77,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			},
 		}
 		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(sts), sts); err != nil {
-			return reconcile.Result{}, fmt.Errorf("couldn't retrieve target statefulset: %w", err)
+			return reconcile.Result{}, fmt.Errorf("couldn't retrieve target statefulset %s: %w", client.ObjectKeyFromObject(sts), err)
 		}
 		pvcs, err := r.getPVCsFromStatefulSet(ctx, sts)
 		if err != nil {
@@ -81,7 +91,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 			}
 		}
 		// Update the status here
-		if err := r.Client.Patch(ctx, pva, pvaPatch); err != nil {
+		if err := r.Client.Status().Patch(ctx, pva, pvaPatch); err != nil {
 			return reconcile.Result{}, fmt.Errorf("could not patch pva %s: %w", client.ObjectKeyFromObject(pva), err)
 		}
 	default:
@@ -102,7 +112,11 @@ func (r *Reconciler) getPVCsFromStatefulSet(ctx context.Context, sts *appsv1.Sta
 
 	pvcsToScale := []*corev1.PersistentVolumeClaim{}
 	for _, pvc := range sts.Spec.VolumeClaimTemplates {
-		for ordinal := sts.Spec.Ordinals.Start; ordinal <= sts.Spec.Ordinals.Start+*sts.Spec.Replicas; ordinal++ {
+		var ordinalStart int32 = 0
+		if sts.Spec.Ordinals != nil {
+			ordinalStart = sts.Spec.Ordinals.Start
+		}
+		for ordinal := ordinalStart; ordinal < ordinalStart+ptr.Deref(sts.Spec.Replicas, 0); ordinal++ {
 			name := pvc.Name + "-" + sts.Name + "-" + fmt.Sprintf("%d", ordinal)
 			tmp := &corev1.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
@@ -124,8 +138,28 @@ func (r *Reconciler) reconcilePVC(ctx context.Context, logger logr.Logger, pva *
 	idx := slices.IndexFunc(pva.Status.PVCs, func(pvcStatus v1alpha1.PersistentVolumeClaimStatus) bool {
 		return pvcStatus.Name == pvc.Name
 	})
+
+	if idx < 0 {
+		pva.Status.PVCs = append(pva.Status.PVCs, v1alpha1.PersistentVolumeClaimStatus{
+			Name: pvc.Name,
+		})
+		idx = len(pva.Status.PVCs) - 1
+	}
+
 	volumeMetrics := r.MetricsStorage.GetMetric(client.ObjectKeyFromObject(pvc))
+	if volumeMetrics == nil {
+		logger.Info("skipping persistentvolumeclaim", "reason", common.ErrNoMetrics.Error())
+		return nil
+	}
+
 	r.updatePVAStatusForPVC(pva, idx, volumeMetrics)
+	shouldReconcile, err := r.shouldReconcilePVC(ctx, pvc, pva, volumeMetrics)
+	if err != nil {
+		return fmt.Errorf("error while checking whether pvc %s should be reconciled: %w", client.ObjectKeyFromObject(pvc), err)
+	}
+	if !shouldReconcile {
+		return nil
+	}
 
 	currSpecSize := pvc.Spec.Resources.Requests.Storage()
 	currStatusSize := pvc.Status.Capacity.Storage()
@@ -313,46 +347,26 @@ func (r *Reconciler) updatePVAStatusForPVC(obj *v1alpha1.PersistentVolumeAutosca
 // [corev1.PersistentVolumeClaim] object targeted by
 // [v1alpha1.PersistentVolumeClaimAutoscaler] should be considered for
 // reconciliation.
-func (r *Reconciler) shouldReconcilePVC(ctx context.Context, pvca *v1alpha1.PersistentVolumeClaimAutoscaler, volInfo *metricssource.VolumeInfo) (bool, error) {
-	pvcObjKey := client.ObjectKey{Namespace: pvca.Namespace, Name: pvca.Spec.ScaleTargetRef.Name}
-	pvcObj := &corev1.PersistentVolumeClaim{}
-	if err := r.client.Get(ctx, pvcObjKey, pvcObj); err != nil {
-		return false, err
-	}
-
-	if err := r.updatePVCAStatus(ctx, pvca, volInfo); err != nil {
-		return false, err
-	}
-
-	// No metrics found, nothing to do for now
-	if volInfo == nil {
-		return false, common.ErrNoMetrics
-	}
-
-	// Validate the spec
-	if err := r.validatePVCA(pvca); err != nil {
-		return false, err
-	}
-
+func (r *Reconciler) shouldReconcilePVC(ctx context.Context, pvc *corev1.PersistentVolumeClaim, pva *v1alpha1.PersistentVolumeAutoscaler, volInfo *source.VolumeInfo) (bool, error) {
 	// Validate the PVC itself against the spec
-	currStatusSize := pvcObj.Status.Capacity.Storage()
+	currStatusSize := pvc.Status.Capacity.Storage()
 	if currStatusSize.IsZero() {
 		return false, fmt.Errorf(".status.capacity.storage is invalid: %s", currStatusSize.String())
 	}
 
-	if pvca.Spec.MaxCapacity.Value() < currStatusSize.Value() {
-		return false, fmt.Errorf("max capacity (%s) cannot be less than current size (%s)", pvca.Spec.MaxCapacity.String(), currStatusSize.String())
+	if pva.Spec.MaxCapacity.Value() < currStatusSize.Value() {
+		return false, fmt.Errorf("max capacity (%s) cannot be less than current size (%s)", pva.Spec.MaxCapacity.String(), currStatusSize.String())
 	}
 
 	// We need a StorageClass with expansion support
-	scName := ptr.Deref(pvcObj.Spec.StorageClassName, "")
+	scName := ptr.Deref(pvc.Spec.StorageClassName, "")
 	if scName == "" {
 		return false, ErrStorageClassNotFound
 	}
 
 	var sc storagev1.StorageClass
 	scKey := types.NamespacedName{Name: scName}
-	if err := r.client.Get(ctx, scKey, &sc); err != nil {
+	if err := r.Client.Get(ctx, scKey, &sc); err != nil {
 		return false, err
 	}
 
@@ -388,21 +402,21 @@ func (r *Reconciler) shouldReconcilePVC(ctx context.Context, pvca *v1alpha1.Pers
 		return false, common.ErrNoMetrics
 	}
 
-	threshold, err := utils.ParsePercentage(pvca.Spec.Threshold)
+	threshold, err := utils.ParsePercentage(pva.Spec.Threshold)
 	if err != nil {
 		return false, fmt.Errorf("cannot parse threshold: %w", err)
 	}
 
 	// VolumeMode should be Filesystem
-	if pvcObj.Spec.VolumeMode == nil {
+	if pvc.Spec.VolumeMode == nil {
 		return false, nil
 	}
-	if *pvcObj.Spec.VolumeMode != corev1.PersistentVolumeFilesystem {
+	if *pvc.Spec.VolumeMode != corev1.PersistentVolumeFilesystem {
 		return false, ErrVolumeModeIsNotFilesystem
 	}
 
 	// The PVC should be bound
-	if pvcObj.Status.Phase != corev1.ClaimBound {
+	if pvc.Status.Phase != corev1.ClaimBound {
 		return false, nil
 	}
 
@@ -410,57 +424,31 @@ func (r *Reconciler) shouldReconcilePVC(ctx context.Context, pvca *v1alpha1.Pers
 	// Free space reached threshold
 	case freeSpace < threshold:
 		r.EventRecorder.Eventf(
-			pvcObj,
+			pvc,
 			corev1.EventTypeWarning,
 			"FreeSpaceThresholdReached",
 			"free space (%.2f%%) is less than the configured threshold (%.2f%%)",
 			freeSpace,
 			threshold,
 		)
-		metrics.ThresholdReachedTotal.WithLabelValues(pvcObj.Namespace, pvcObj.Name, "space").Inc()
+		metrics.ThresholdReachedTotal.WithLabelValues(pvc.Namespace, pvc.Name, "space").Inc()
 		return true, nil
 
 	// Free inodes reached threshold
 	case volInfo.CapacityInodes > 0.0 && (freeInodes < threshold):
 		r.EventRecorder.Eventf(
-			pvcObj,
+			pvc,
 			corev1.EventTypeWarning,
 			"FreeInodesThresholdReached",
 			"free inodes (%.2f%%) are less than the configured threshold (%.2f%%)",
 			freeInodes,
 			threshold,
 		)
-		metrics.ThresholdReachedTotal.WithLabelValues(pvcObj.Namespace, pvcObj.Name, "inodes").Inc()
+		metrics.ThresholdReachedTotal.WithLabelValues(pvc.Namespace, pvc.Name, "inodes").Inc()
 		return true, nil
 
 	// No need to reconcile the PVC for now
 	default:
 		return false, nil
 	}
-}
-
-// validatePVCA sanity checks the spec in order to ensure it contains valid
-// values. Returns nil if the spec is valid, and non-nil error otherwise.
-func (r *Reconciler) validatePVA(obj *v1alpha1.PersistentVolumeClaimAutoscaler) error {
-	threshold, err := utils.ParsePercentage(obj.Spec.Threshold)
-	if err != nil {
-		return fmt.Errorf("cannot parse threshold: %w", err)
-	}
-	if threshold == 0.0 {
-		return fmt.Errorf("invalid threshold: %w", common.ErrZeroPercentage)
-	}
-
-	if obj.Spec.MaxCapacity.IsZero() {
-		return fmt.Errorf("invalid max capacity: %w", common.ErrNoMaxCapacity)
-	}
-
-	increaseBy, err := utils.ParsePercentage(obj.Spec.IncreaseBy)
-	if err != nil {
-		return fmt.Errorf("cannot parse increase-by value: %w", err)
-	}
-	if increaseBy == 0.0 {
-		return fmt.Errorf("invalid increase-by: %w", common.ErrZeroPercentage)
-	}
-
-	return nil
 }

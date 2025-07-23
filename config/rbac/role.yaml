@@ -28,8 +28,17 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - autoscaling.gardener.cloud
   resources:
+  - persistentvolumeautoscalers
   - persistentvolumeclaimautoscalers
   verbs:
   - create
@@ -42,12 +51,14 @@ rules:
 - apiGroups:
   - autoscaling.gardener.cloud
   resources:
+  - persistentvolumeautoscalers/finalizers
   - persistentvolumeclaimautoscalers/finalizers
   verbs:
   - update
 - apiGroups:
   - autoscaling.gardener.cloud
   resources:
+  - persistentvolumeautoscalers/status
   - persistentvolumeclaimautoscalers/status
   verbs:
   - get

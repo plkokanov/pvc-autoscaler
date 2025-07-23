@@ -8,7 +8,7 @@ spec:
     whenDeleted: Delete
     whenScaled: Delete
   podManagementPolicy: Parallel
-  replicas: 1
+  replicas: 3
   revisionHistoryLimit: 3
   selector:
     matchLabels:
@@ -39,6 +39,8 @@ spec:
         volumeMounts:
         - mountPath: /test-data-lvm
           name: data-lvm
+        - mountPath: /test-data-lvm2
+          name: data-lvm2
       dnsPolicy: ClusterFirst
       restartPolicy: Always
       schedulerName: default-scheduler
@@ -53,6 +55,18 @@ spec:
     kind: PersistentVolumeClaim
     metadata:
       name: data-lvm
+    spec:
+      storageClassName: openebs-lvm
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 128Mi
+      volumeMode: Filesystem
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      name: data-lvm2
     spec:
       storageClassName: openebs-lvm
       accessModes:

@@ -13,7 +13,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	v1alpha1 "github.com/gardener/pvc-autoscaler/api/autoscaling/v1alpha1"
 	"github.com/gardener/pvc-autoscaler/internal/common"
 	"github.com/gardener/pvc-autoscaler/internal/metrics"
 	metricssource "github.com/gardener/pvc-autoscaler/internal/metrics/source"
@@ -113,11 +112,15 @@ func (r *Runner) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx, "controller", common.ControllerName)
 	defer ticker.Stop()
 
+	if err := r.loadMetrics(ctx); err != nil {
+		logger.Error(err, "failed to load metrics")
+	}
+
 	for {
 		select {
 		case <-ticker.C:
-			if err := r.enqueueObjects(ctx); err != nil {
-				logger.Error(err, "failed to enqueue persistentvolumeclaimautoscalers")
+			if err := r.loadMetrics(ctx); err != nil {
+				logger.Error(err, "failed to load metrics")
 			}
 		case <-ctx.Done():
 			return nil
@@ -127,20 +130,15 @@ func (r *Runner) Start(ctx context.Context) error {
 
 // enqueueObjects enqueues the [v1alpha1.PersitentVolumeClaimAutoscaler]
 // resources for reconciliation.
-func (r *Runner) enqueueObjects(ctx context.Context) error {
-	var items v1alpha1.PersistentVolumeClaimAutoscalerList
-
-	// Nothing to do for now
-	if len(items.Items) == 0 {
-		return nil
-	}
-
+func (r *Runner) loadMetrics(ctx context.Context) error {
 	metricsData, err := r.metricsSource.Get(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get metrics: %w", err)
 	}
 
-	r.storage.SetMap(metricsData)
+	logger := log.FromContext(ctx, "controller", common.ControllerName)
+	logger.Info("loading metrics into storage")
 
+	r.storage.SetMap(metricsData)
 	return nil
 }
