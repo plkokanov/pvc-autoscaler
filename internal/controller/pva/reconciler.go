@@ -59,6 +59,7 @@ var ErrNoClient = errors.New("no client provided")
 //+kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 //+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
+//+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("pva", req.NamespacedName)
@@ -68,37 +69,141 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		return reconcile.Result{}, err
 	}
 
-	switch pva.Spec.TargetRef.Kind {
-	case "StatefulSet":
-		sts := &appsv1.StatefulSet{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      pva.Spec.TargetRef.Name,
-				Namespace: pva.Spec.TargetRef.Namespace,
-			},
-		}
-		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(sts), sts); err != nil {
-			return reconcile.Result{}, fmt.Errorf("couldn't retrieve target statefulset %s: %w", client.ObjectKeyFromObject(sts), err)
-		}
-		pvcs, err := r.getPVCsFromStatefulSet(ctx, sts)
-		if err != nil {
-			return reconcile.Result{}, fmt.Errorf("couldn't retrieve persistent volume claims: %w", err)
-		}
-
-		pvaPatch := client.MergeFrom(pva.DeepCopy())
-		for _, pvc := range pvcs {
-			if err := r.reconcilePVC(ctx, logger, pva, pvc); err != nil {
-				return reconcile.Result{}, fmt.Errorf("couldn't reconcile pvc %s: %w", client.ObjectKeyFromObject(pvc), err)
-			}
-		}
-		// Update the status here
-		if err := r.Client.Status().Patch(ctx, pva, pvaPatch); err != nil {
-			return reconcile.Result{}, fmt.Errorf("could not patch pva %s: %w", client.ObjectKeyFromObject(pva), err)
-		}
-	default:
-		return reconcile.Result{}, nil
+	// switch pva.Spec.TargetRef.Kind {
+	// case "StatefulSet":
+	// 	sts := &appsv1.StatefulSet{
+	// 		ObjectMeta: metav1.ObjectMeta{
+	// 			Name:      pva.Spec.TargetRef.Name,
+	// 			Namespace: pva.Spec.TargetRef.Namespace,
+	// 		},
+	// 	}
+	// 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(sts), sts); err != nil {
+	// 		return reconcile.Result{}, fmt.Errorf("couldn't retrieve target statefulset %s: %w", client.ObjectKeyFromObject(sts), err)
+	// 	}
+	pvcs, err := r.getPVCsForPods(ctx, logger, pva, &pva.Spec.TargetRef)
+	if err != nil {
+		return reconcile.Result{}, fmt.Errorf("couldn't retrieve persistent volume claims: %w", err)
 	}
 
+	pvaPatch := client.MergeFrom(pva.DeepCopy())
+	for _, pvc := range pvcs {
+		if err := r.reconcilePVC(ctx, logger, pva, pvc); err != nil {
+			return reconcile.Result{}, fmt.Errorf("couldn't reconcile pvc %s: %w", client.ObjectKeyFromObject(pvc), err)
+		}
+	}
+	// Update the status here
+	if err := r.Client.Status().Patch(ctx, pva, pvaPatch); err != nil {
+		return reconcile.Result{}, fmt.Errorf("could not patch pva %s: %w", client.ObjectKeyFromObject(pva), err)
+	}
+	// default:
+	// 	return reconcile.Result{}, nil
+	// }
+
 	return reconcile.Result{RequeueAfter: r.ResyncPeriod}, nil
+}
+
+func (r *Reconciler) getPVCsForPods(ctx context.Context, log logr.Logger, pva *v1alpha1.PersistentVolumeAutoscaler, targetRef *corev1.ObjectReference) ([]*corev1.PersistentVolumeClaim, error) {
+	log.Info("listing pods in namespace", "namespace", pva.Spec.TargetRef.Namespace)
+
+	podList := &corev1.PodList{}
+	// TODO: can we optimize this list
+	if err := r.Client.List(ctx, podList, &client.ListOptions{Namespace: pva.Spec.TargetRef.Namespace}); err != nil {
+		return nil, fmt.Errorf("could not list pods in namespace %s: %w", pva.Spec.TargetRef.Namespace, err)
+	}
+
+	pvcsToScale := []*corev1.PersistentVolumeClaim{}
+
+	for _, item := range podList.Items {
+		controllerForPodMatches, err := r.controllerForPodContainsTarget(ctx, log, &item, ownerRefFromTargetRef(targetRef))
+		if !controllerForPodMatches {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("error while trying to find matching controller for pod %s: %w", client.ObjectKeyFromObject(&item), err)
+		}
+		for _, volume := range item.Spec.Volumes {
+			if volumeClaim := volume.PersistentVolumeClaim; volumeClaim != nil {
+				// if slices.ContainsFunc(pva.Spec.PVCResizePolicies, func(pvcResizePolicy v1alpha1.PVCResizePolicy) bool {
+				// 	return pvcResizePolicy.Name == volumeClaim.ClaimName || strings.HasPrefix(pvcResizePolicy.NameTemplate, volumeClaim.ClaimName)
+				// }) {
+				pvc := &corev1.PersistentVolumeClaim{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      volumeClaim.ClaimName,
+						Namespace: pva.Spec.TargetRef.Namespace,
+					},
+				}
+				if err := r.Client.Get(ctx, client.ObjectKeyFromObject(pvc), pvc); err != nil {
+					return nil, fmt.Errorf("could nto retrieve pvc %s: %w", client.ObjectKeyFromObject(pvc), err)
+				}
+				pvcsToScale = append(pvcsToScale, pvc)
+				// }
+			}
+		}
+	}
+
+	return pvcsToScale, nil
+}
+
+func ownerRefFromTargetRef(targetRef *corev1.ObjectReference) *metav1.OwnerReference {
+	return &metav1.OwnerReference{
+		APIVersion: targetRef.APIVersion,
+		Kind:       targetRef.Kind,
+		Name:       targetRef.Name,
+	}
+}
+
+func (r *Reconciler) controllerForPodContainsTarget(ctx context.Context, log logr.Logger, pod *corev1.Pod, targetRef *metav1.OwnerReference) (bool, error) {
+	log.Info("checking if owners of pod matches resize target", "pod", client.ObjectKeyFromObject(pod))
+
+	var podControllerOwnerRef *metav1.OwnerReference
+	for _, ownerRef := range pod.OwnerReferences {
+		if ptr.Deref(ownerRef.Controller, false) {
+			podControllerOwnerRef = &ownerRef
+			break
+		}
+	}
+	if podControllerOwnerRef == nil {
+		log.Info("could not find owner controller for pod", "pod", client.ObjectKeyFromObject(pod))
+		return false, nil
+	}
+
+	log.Info("found owner controller for pod", "pod", client.ObjectKeyFromObject(pod), "controller", podControllerOwnerRef.Name)
+
+	for {
+		if podControllerOwnerRef.Name == targetRef.Name &&
+			podControllerOwnerRef.Kind == targetRef.Kind &&
+			podControllerOwnerRef.APIVersion == targetRef.APIVersion {
+			log.Info("owner controller for pod matches resize target", "pod", client.ObjectKeyFromObject(pod), "target", targetRef.Name)
+			return true, nil
+		}
+
+		controllerFound := false
+
+		metaData := &metav1.PartialObjectMetadata{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      podControllerOwnerRef.Name,
+				Namespace: pod.Namespace,
+			},
+		}
+		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(metaData), metaData); err != nil {
+			return false, fmt.Errorf("could not retrieve metadata for object %s: %w", client.ObjectKeyFromObject(metaData), err)
+		}
+
+		for _, ownerRef := range pod.OwnerReferences {
+			if ptr.Deref(ownerRef.Controller, false) {
+				controllerFound = true
+				podControllerOwnerRef = &ownerRef
+				break
+			}
+		}
+		if controllerFound {
+			log.Info("iterating to next controller for pod", "pod", client.ObjectKeyFromObject(pod), "target", podControllerOwnerRef.Name)
+		}
+		if !controllerFound {
+			log.Info("we are currently at top most controller for pod", "pod", client.ObjectKeyFromObject(pod), "target", podControllerOwnerRef.Name)
+			return false, nil
+		}
+	}
 }
 
 func (r *Reconciler) getPVCsFromStatefulSet(ctx context.Context, sts *appsv1.StatefulSet) ([]*corev1.PersistentVolumeClaim, error) {

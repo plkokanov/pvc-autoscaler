@@ -32,6 +32,33 @@ type PersistentVolumeAutoscalerSpec struct {
 	// TargetRef specifies the reference to the parent controller for which the PVCs will be
 	// managed by pvc-autoscaler.
 	TargetRef corev1.ObjectReference `json:"targetRef,omitempty"`
+
+	// TargetRef specifies the reference to the parent controller for which the PVCs will be
+	// managed by pvc-autoscaler.
+	PVCResizePolicies []PVCResizePolicy `json:"pvcResizePolicies,omitempty"`
+}
+
+type PVCResizePolicy struct {
+	// Name is the name of the PVC to resize.
+	Name string `json:"name"`
+
+	// NameTemplate is the name template of the PVC to resize.
+	NameTemplate string `json:"nameTemplate"`
+
+	// IncreaseBy specifies an increase by percentage value (e.g. 10%, 20%,
+	// etc.) by which the Persistent Volume Claim storage will be resized.
+	IncreaseBy string `json:"increaseBy,omitempty"`
+
+	// Threshold specifies the threshold value in percentage (e.g. 10%, 20%,
+	// etc.) for the PVC. Once the available capacity (free space) for the
+	// PVC reaches or drops below the specified threshold this will trigger
+	// a resize operation by the controller.
+	Threshold string `json:"threshold,omitempty"`
+
+	// MaxCapacity specifies the maximum capacity up to which a PVC is
+	// allowed to be extended. The max capacity is specified as a
+	// [k8s.io/apimachinery/pkg/api/resource.Quantity] value.
+	MaxCapacity resource.Quantity `json:"maxCapacity,omitempty"`
 }
 
 type PersistentVolumeAutoscalerStatus struct {

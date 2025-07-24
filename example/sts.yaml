@@ -5,8 +5,8 @@ metadata:
   namespace: default
 spec:
   persistentVolumeClaimRetentionPolicy:
-    whenDeleted: Delete
-    whenScaled: Delete
+    whenDeleted: Retain
+    whenScaled: Retain
   podManagementPolicy: Parallel
   replicas: 3
   revisionHistoryLimit: 3
@@ -66,6 +66,8 @@ spec:
   - apiVersion: v1
     kind: PersistentVolumeClaim
     metadata:
+      annotations:
+        key: value
       name: data-lvm2
     spec:
       storageClassName: openebs-lvm
