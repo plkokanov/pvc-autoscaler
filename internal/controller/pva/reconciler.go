@@ -59,7 +59,13 @@ var ErrNoClient = errors.New("no client provided")
 //+kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch
 //+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apps,resources=replicasets,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch
+//+kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+//+kubebuilder:rbac:groups=monitoring.coreos.com,resources=alertmanagers,verbs=get;list;watch
+//+kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheuses,verbs=get;list;watch
 
 func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx).WithValues("pva", req.NamespacedName)
@@ -154,6 +160,8 @@ func ownerRefFromTargetRef(targetRef *corev1.ObjectReference) *metav1.OwnerRefer
 
 func (r *Reconciler) controllerForPodContainsTarget(ctx context.Context, log logr.Logger, pod *corev1.Pod, targetRef *metav1.OwnerReference) (bool, error) {
 	log.Info("checking if owners of pod matches resize target", "pod", client.ObjectKeyFromObject(pod))
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
 
 	var podControllerOwnerRef *metav1.OwnerReference
 	for _, ownerRef := range pod.OwnerReferences {
@@ -180,16 +188,23 @@ func (r *Reconciler) controllerForPodContainsTarget(ctx context.Context, log log
 		controllerFound := false
 
 		metaData := &metav1.PartialObjectMetadata{
+			TypeMeta: metav1.TypeMeta{
+				Kind:       podControllerOwnerRef.Kind,
+				APIVersion: podControllerOwnerRef.APIVersion,
+			},
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      podControllerOwnerRef.Name,
 				Namespace: pod.Namespace,
 			},
 		}
-		if err := r.Client.Get(ctx, client.ObjectKeyFromObject(metaData), metaData); err != nil {
+
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: podControllerOwnerRef.Name, Namespace: pod.Namespace}, metaData); err != nil {
 			return false, fmt.Errorf("could not retrieve metadata for object %s: %w", client.ObjectKeyFromObject(metaData), err)
 		}
 
-		for _, ownerRef := range pod.OwnerReferences {
+		log.Info("retrieved partial object metadata", "metadata", client.ObjectKeyFromObject(metaData))
+
+		for _, ownerRef := range metaData.OwnerReferences {
 			if ptr.Deref(ownerRef.Controller, false) {
 				controllerFound = true
 				podControllerOwnerRef = &ownerRef
@@ -198,8 +213,7 @@ func (r *Reconciler) controllerForPodContainsTarget(ctx context.Context, log log
 		}
 		if controllerFound {
 			log.Info("iterating to next controller for pod", "pod", client.ObjectKeyFromObject(pod), "target", podControllerOwnerRef.Name)
-		}
-		if !controllerFound {
+		} else {
 			log.Info("we are currently at top most controller for pod", "pod", client.ObjectKeyFromObject(pod), "target", podControllerOwnerRef.Name)
 			return false, nil
 		}

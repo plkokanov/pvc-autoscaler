@@ -1,0 +1,74 @@
+apiVersion: autoscaling.gardener.cloud/v1alpha1
+kind: PersistentVolumeAutoscaler
+metadata:
+  name: test-pva
+spec:
+  increaseBy: 10%
+  threshold: 50%
+  maxCapacity: 10Gi
+  targetRef:
+    kind: StatefulSet
+    apiVersion: apps/v1
+    name: test-sts
+    namespace: default
+  pvcPolicy:
+  - name: data-lvm1
+    increaseBy: 10%
+    threshold: 25%
+    maxCapacity: 10Gi
+status:
+  pvcs:
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 97.72%
+    lastCheck: "2025-07-25T05:27:02Z"
+    name: data-lvm-test-sts-2
+    newSize: "0"
+    nextCheck: "2025-07-25T05:27:12Z"
+    prevSize: "0"
+    usedInodesPercentage: 0.04%
+    usedSpacePercentage: 2.28%
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 97.72%
+    lastCheck: "2025-07-25T05:27:02Z"
+    name: data-lvm2-test-sts-2
+    newSize: "0"
+    nextCheck: "2025-07-25T05:27:12Z"
+    prevSize: "0"
+    usedInodesPercentage: 0.04%
+    usedSpacePercentage: 2.28%
+  - freeInodesPercentage: 100.00%
+    freeSpacePercentage: 89.48%
+    lastCheck: "2025-07-25T05:27:02Z"
+    name: data-lvm-test-sts-0
+    newSize: 1Gi
+    nextCheck: "2025-07-25T05:27:12Z"
+    prevSize: 128Mi
+    usedInodesPercentage: 0.00%
+    usedSpacePercentage: 10.52%
+  - freeInodesPercentage: 100.00%
+    freeSpacePercentage: 89.48%
+    lastCheck: "2025-07-25T05:27:02Z"
+    name: data-lvm2-test-sts-0
+    newSize: "0"
+    nextCheck: "2025-07-25T05:27:12Z"
+    prevSize: "0"
+    usedInodesPercentage: 0.00%
+    usedSpacePercentage: 10.52%
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 97.72%
+    lastCheck: "2025-07-25T05:27:02Z"
+    name: data-lvm-test-sts-1
+    newSize: "0"
+    nextCheck: "2025-07-25T05:27:12Z"
+    prevSize: "0"
+    usedInodesPercentage: 0.04%
+    usedSpacePercentage: 2.28%
+  - freeInodesPercentage: 100.00%
+    freeSpacePercentage: 89.48%
+    lastCheck: "2025-07-25T05:27:02Z"
+    name: data-lvm2-test-sts-1
+    newSize: "0"
+    nextCheck: "2025-07-25T05:27:12Z"
+    prevSize: "0"
+    usedInodesPercentage: 0.00%
+    usedSpacePercentage: 10.52%

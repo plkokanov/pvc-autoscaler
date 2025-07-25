@@ -681,6 +681,9 @@ rules:
 - apiGroups:
   - apps
   resources:
+  - daemonsets
+  - deployments
+  - replicasets
   - statefulsets
   verbs:
   - get
@@ -715,6 +718,15 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - alertmanagers
+  - prometheuses
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - storage.k8s.io
   resources:

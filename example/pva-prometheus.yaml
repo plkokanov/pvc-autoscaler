@@ -2,12 +2,13 @@ apiVersion: autoscaling.gardener.cloud/v1alpha1
 kind: PersistentVolumeAutoscaler
 metadata:
   name: test-pva
+  namespace: monitoring
 spec:
   increaseBy: 10%
   threshold: 50%
   maxCapacity: 10Gi
   targetRef:
-    kind: StatefulSet
-    apiVersion: apps/v1
-    name: test-sts
-    namespace: default
+    kind: Prometheus
+    apiVersion: monitoring.coreos.com/v1
+    name: k8s
+    namespace: monitoring

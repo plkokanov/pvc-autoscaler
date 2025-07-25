@@ -1,0 +1,18 @@
+apiVersion: autoscaling.gardener.cloud/v1alpha1
+kind: PersistentVolumeClaimAutoscaler
+metadata:
+  name: test-pvca
+spec:
+  increaseBy: 10%
+  threshold: 50%
+  maxCapacity: 10Gi
+  scaleTargetRef:
+    name: data-lvm-test-sts-0
+status:
+  conditions:
+  - lastProbeTime: null
+    lastTransitionTime: "2025-07-24T11:37:45Z"
+    message: Waiting for user to (re-)start a pod to finish file system resize of
+      volume on node.
+    status: "True"
+    type: FileSystemResizePending

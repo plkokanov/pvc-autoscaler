@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    pvc.autoscaling.gardener.cloud/is-enabled: "true"
+    pvc.autoscaling.gardener.cloud/increase-by: "10%"
+    pvc.autoscaling.gardener.cloud/threshold: "10%"
+    pvc.autoscaling.gardener.cloud/max-capacity: "10Gi"
+  name: test-pvc
+spec:
+  storageClassName: openebs-lvm
+  dataSource:
+    name: new-snapshot-test
+    kind: VolumeSnapshot
+    apiGroup: snapshot.storage.k8s.io
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: europe-docker.pkg.dev/gardener-project/releases/gardener/pvc-autoscaler
-  newTag: latest
+  newTag: v0.1.3-dev-f56376d-dirty

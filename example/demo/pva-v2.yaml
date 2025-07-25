@@ -1,0 +1,91 @@
+apiVersion: autoscaling.gardener.cloud/v1alpha1
+kind: PersistentVolumeAutoscaler
+metadata:
+  name: test-pva
+spec:
+  increaseBy: 10%
+  threshold: 50%
+  maxCapacity: 10Gi
+  targetRef:
+    kind: Prometheus
+    apiVersion: monitoring.coreos.com/v1
+    name: test-for-pva
+  # updatePolicy:
+  #   updateMode: {offline|online}
+  #   minReplicas: 1
+  pvcPolicy:
+  - name: data-lvm1
+    increaseBy: 10%
+    threshold: 25%
+    maxCapacity: 10Gi
+  - name: data-lvm2
+    increaseBy: 20%
+    threshold: 20%
+    maxCapacity: 5Gi
+  - name: data-lvm3
+    increaseBy: 20%
+    threshold: 20%
+    maxCapacity: 5Gi
+status:
+  lastOperation:
+    lastTransitionTime: "2025-06-04T10:08:59Z"
+    lastUpdateTime: "2025-06-04T10:08:59Z"
+    state: Error
+    message: |
+      Could not resize all PVCs:
+        - data-lvm2-test-sts-1: Some random ratelimit error asdf
+        - data-lvm2-test-sts-0: Resize timeout
+  conditions:
+  - lastTransitionTime: "2025-06-04T10:08:59Z"
+    lastUpdateTime: "2025-06-04T10:08:59Z"
+    status: "True"
+    type: ResizeInProgress
+    message: |
+      The following PVCs are being resized:
+        - data-lvm2-test-sts-1
+        - data-lvm2-test-sts-0
+  - lastTransitionTime: "2025-06-04T10:08:59Z"
+    lastUpdateTime: "2025-06-04T10:08:59Z"
+    status: "True"
+    type: ResizePending
+    message: |
+      Resize is pending for the following PVCs:
+        - data-lvm2-test-sts-0
+        - data-lvm2-test-sts-1
+  pvcs:
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 97.72%
+    lastCheck: "2025-07-23T13:39:24Z"
+    name: data-lvm1-test-sts-0
+    newSize: "0"
+    prevSize: "0"
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 97.72%
+    lastCheck: "2025-07-23T13:39:24Z"
+    name: data-lvm1-test-sts-1
+    newSize: "0"
+    prevSize: "0"
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 2.72%
+    lastCheck: "2025-07-23T13:39:24Z"
+    name: data-lvm2-test-sts-0
+    newSize: "0"
+    prevSize: "0"
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 10.72%
+    lastCheck: "2025-07-23T13:39:24Z"
+    name: data-lvm2-test-sts-1
+    newSize: "0"
+    prevSize: "0"
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 97.72%
+    lastCheck: "2025-07-23T13:39:24Z"
+    name: data-lvm3-test-sts-0
+    newSize: "2Gi"
+    prevSize: "1Gi"
+  - freeInodesPercentage: 99.96%
+    freeSpacePercentage: 97.72%
+    lastCheck: "2025-07-23T13:39:24Z"
+    name: data-lvm3-test-sts1
+    newSize: "2Gi"
+    prevSize: "1Gi"
