@@ -26,14 +26,14 @@ spec:
           echo "Waiting for metrics-test-pod..."
           chroot /host kubectl wait --for=condition=Ready --timeout=120s -n pvc-autoscaler-system  pod/pvc-autoscaler-metrics-test-pod --kubeconfig=/etc/kubernetes/admin.conf
 
-          sleep 60 
+          sleep 60
           echo "Starting kubelet_volume_stats_* metrics validation..."
           node_name=$(chroot /host kubectl get nodes -o jsonpath='{.items[0].metadata.name}' --kubeconfig=/etc/kubernetes/admin.conf 2>/dev/null)
           metrics_path="/api/v1/nodes/${node_name}/proxy/metrics"
-          
+
           output=$(chroot /host kubectl get --raw "${metrics_path}" --kubeconfig=/etc/kubernetes/admin.conf)
           exit_status=$?
-          
+
           if [ $exit_status -eq 0 ]; then
             echo "Successfully accessed kubelet metrics endpoint"
             if echo "${output}" | grep -q "kubelet_volume_stats_"; then
@@ -64,9 +64,11 @@ spec:
         - name: config
           mountPath: /etc/nginx/nginx.conf
           subPath: nginx.conf
-        - name: config
-          mountPath: /etc/nginx/metrics.txt
-          subPath: metrics.txt
+        - name: metrics-data
+          mountPath: /var/metrics
+        - name: scripts
+          mountPath: /usr/local/bin/update-metrics.sh
+          subPath: update-metrics.sh
         resources:
           requests:
             memory: "32Mi"
@@ -86,10 +88,36 @@ spec:
             port: 8080
           initialDelaySeconds: 15
           periodSeconds: 20
+        lifecycle:
+          postStart:
+            exec:
+              command:
+              - /bin/sh
+              - -c
+              - |
+                # Initialize metrics file with default values
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_available_bytes 1073741824 namespace monitoring persistentvolumeclaim vali-vali-0
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_available_bytes 1073741824 namespace pvc-autoscaler-system persistentvolumeclaim vali-vali-0-test-sts-0
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_available_bytes 4294967296 namespace default persistentvolumeclaim test-pvc-2
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_capacity_bytes 107374182400 namespace monitoring persistentvolumeclaim vali-vali-0
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_capacity_bytes 107374182400 namespace pvc-autoscaler-system persistentvolumeclaim vali-vali-0-test-sts-0
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_capacity_bytes 53687091200 namespace default persistentvolumeclaim test-pvc-2
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_inodes_free 65536 namespace monitoring persistentvolumeclaim vali-vali-0
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_inodes_free 65536 namespace pvc-autoscaler-system persistentvolumeclaim vali-vali-0-test-sts-0
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_inodes_free 262144 namespace default persistentvolumeclaim test-pvc-2
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_inodes 655360 namespace monitoring persistentvolumeclaim vali-vali-0
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_inodes 655360 namespace pvc-autoscaler-system persistentvolumeclaim vali-vali-0-test-sts-0
+                /usr/local/bin/update-metrics.sh kubelet_volume_stats_inodes 327680 namespace default persistentvolumeclaim test-pvc-2
       volumes:
       - name: config
         configMap:
           name: minimal-fake-metrics-config
+      - name: scripts
+        configMap:
+          name: minimal-fake-metrics-config
+          defaultMode: 0755
+      - name: metrics-data
+        emptyDir: {}
       - name: host-root
         hostPath:
           path: /

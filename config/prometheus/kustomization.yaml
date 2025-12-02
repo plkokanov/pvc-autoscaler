@@ -2,7 +2,7 @@ configMapGenerator:
 - name: minimal-fake-metrics-config
   files:
   - nginx.conf
-  - metrics.txt
+  - update-metrics.sh
 
 resources:
 - metrics-test-pod-with-pvc.yaml
