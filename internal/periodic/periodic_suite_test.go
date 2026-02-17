@@ -24,6 +24,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	"github.com/gardener/pvc-autoscaler/api/autoscaling/v1alpha1"
+	"github.com/gardener/pvc-autoscaler/internal/target"
+	"github.com/gardener/pvc-autoscaler/internal/target/pvcfetcher"
+	"github.com/gardener/pvc-autoscaler/internal/target/selectorfetcher"
 	testutils "github.com/gardener/pvc-autoscaler/test/utils"
 )
 
@@ -32,6 +35,8 @@ var k8sClient client.Client
 var testEnv *envtest.Environment
 var eventCh = make(chan event.GenericEvent)
 var eventRecorder = record.NewFakeRecorder(1024)
+var selectorFetcher selectorfetcher.Fetcher
+var pvcFetcher pvcfetcher.Fetcher
 var parentCtx context.Context
 var cancelFunc context.CancelFunc
 
@@ -78,6 +83,15 @@ var _ = BeforeSuite(func() {
 
 	// Create test storage class
 	Expect(k8sClient.Create(context.Background(), &testutils.StorageClass)).To(Succeed())
+
+	scalesClient, restMapper, err := target.NewScaleClientWithDiscovery(cfg)
+	Expect(err).NotTo(HaveOccurred())
+
+	selectorFetcher, err = selectorfetcher.New(selectorfetcher.WithRESTMapper(restMapper), selectorfetcher.WithScaleClient(scalesClient))
+	Expect(err).NotTo(HaveOccurred())
+
+	pvcFetcher, err = pvcfetcher.New(pvcfetcher.WithClient(k8sClient), pvcfetcher.WithSelectorFetcher(selectorFetcher))
+	Expect(err).NotTo(HaveOccurred())
 })
 
 var _ = AfterSuite(func() {

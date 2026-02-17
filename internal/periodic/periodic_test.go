@@ -44,6 +44,7 @@ func newRunner() (*Runner, error) {
 		WithEventRecorder(eventRecorder),
 		WithInterval(time.Second),
 		WithMetricsSource(metricsSource),
+		WithPVCFetcher(pvcFetcher),
 	)
 
 	return runner, err
@@ -102,6 +103,19 @@ var _ = Describe("Periodic Runner", func() {
 				WithMetricsSource(fake.New()),
 			)
 			Expect(err).To(MatchError(common.ErrNoEventRecorder))
+			Expect(runner).To(BeNil())
+		})
+
+		It("should fail without pvc fetcher", func() {
+			runner, err := New(
+				WithClient(k8sClient),
+				WithEventChannel(eventCh),
+				WithEventRecorder(nil), // should not be nil
+				WithInterval(time.Second),
+				WithMetricsSource(fake.New()),
+				WithEventRecorder(eventRecorder),
+			)
+			Expect(err).To(MatchError(ErrNoPVCFetcher))
 			Expect(runner).To(BeNil())
 		})
 
@@ -246,9 +260,9 @@ var _ = Describe("Periodic Runner", func() {
 			Expect(runner).NotTo(BeNil())
 
 			// No metrics at all
-			ok, err := runner.shouldReconcilePVC(parentCtx, obj, nil)
-			Expect(ok).To(BeFalse())
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, obj)
 			Expect(err).To(HaveOccurred())
+			Expect(pvcs).To(BeEmpty())
 		})
 
 		It("should return common.ErrNoMetrics", func() {
@@ -288,8 +302,12 @@ var _ = Describe("Periodic Runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(runner).NotTo(BeNil())
 
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
 			// No metrics at all
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, nil)
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, nil)
 			Expect(ok).To(BeFalse())
 			Expect(err).To(MatchError(common.ErrNoMetrics))
 		})
@@ -355,7 +373,15 @@ var _ = Describe("Periodic Runner", func() {
 			runner, err := newRunner()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(runner).NotTo(BeNil())
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, &metricssource.VolumeInfo{})
+
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): &metricssource.VolumeInfo{},
+			})
+
 			Expect(ok).To(BeFalse())
 			Expect(err).To(MatchError(ErrStorageClassNotFound))
 		})
@@ -434,7 +460,14 @@ var _ = Describe("Periodic Runner", func() {
 			runner, err := newRunner()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(runner).NotTo(BeNil())
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, &metricssource.VolumeInfo{})
+
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): &metricssource.VolumeInfo{},
+			})
 			Expect(ok).To(BeFalse())
 			Expect(err).To(MatchError(ErrStorageClassDoesNotSupportExpansion))
 		})
@@ -508,7 +541,14 @@ var _ = Describe("Periodic Runner", func() {
 			runner, err := newRunner()
 			Expect(err).NotTo(HaveOccurred())
 			Expect(runner).NotTo(BeNil())
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, volInfo)
+
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): volInfo,
+			})
 			Expect(ok).To(BeFalse())
 			Expect(err).To(MatchError(ErrVolumeModeIsNotFilesystem))
 		})
@@ -568,7 +608,14 @@ var _ = Describe("Periodic Runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(runner).NotTo(BeNil())
 
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, volInfo)
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): volInfo,
+			})
+
 			Expect(ok).To(BeFalse())
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -624,7 +671,13 @@ var _ = Describe("Periodic Runner", func() {
 			Expect(runner).NotTo(BeNil())
 			withEventRecorderOpt(runner)
 
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, volInfo)
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): volInfo,
+			})
 			Expect(ok).To(BeTrue())
 			Expect(err).ToNot(HaveOccurred())
 
@@ -679,7 +732,13 @@ var _ = Describe("Periodic Runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(runner).NotTo(BeNil())
 
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, volInfo)
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): volInfo,
+			})
 			Expect(ok).To(BeFalse())
 			Expect(err).To(MatchError(common.ErrStaleMetrics))
 		})
@@ -735,7 +794,13 @@ var _ = Describe("Periodic Runner", func() {
 			Expect(runner).NotTo(BeNil())
 			withEventRecorderOpt(runner)
 
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, volInfo)
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): volInfo,
+			})
 			Expect(ok).To(BeTrue())
 			Expect(err).ToNot(HaveOccurred())
 
@@ -791,10 +856,91 @@ var _ = Describe("Periodic Runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(runner).NotTo(BeNil())
 
-			ok, err := runner.shouldReconcilePVC(parentCtx, pvca, volInfo)
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): volInfo,
+			})
 			Expect(ok).To(BeFalse())
 			Expect(err).ToNot(HaveOccurred())
 		})
+
+		It("should reconcile - statefulset targeted", func() {
+			pvc, err := testutils.CreatePVC(parentCtx, k8sClient, "pvc-free-inodes-threshold-reached-with-selector", "1Gi")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvc).NotTo(BeNil())
+
+			pod, err := testutils.CreatePod(parentCtx, k8sClient, pvc, "pvc-free-inodes-threshold-reached", map[string]string{"app": "test"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pod).NotTo(BeNil())
+
+			statefulSet, err := testutils.CreateStatefulSet(parentCtx, k8sClient, pod, pvc, "pvc-free-inodes-threshold-reached", map[string]string{"app": "test"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(statefulSet).NotTo(BeNil())
+
+			// The PVC Autoscaler targeting our test PVC
+			targetRef := autoscalingv1.CrossVersionObjectReference{
+				APIVersion: "apps/v1",
+				Kind:       "StatefulSet",
+				Name:       "pvc-free-inodes-threshold-reached",
+			}
+
+			volumePolicies := []v1alpha1.VolumePolicy{
+				{
+					MaxCapacity: resource.MustParse("5Gi"),
+					ScaleUp: ptr.To(v1alpha1.ScalingRules{
+						UtilizationThresholdPercent: ptr.To(common.DefaultThresholdPercent),
+						StepPercent:                 ptr.To(common.DefaultStepPercent),
+						MinStepAbsolute:             ptr.To(resource.MustParse("1Gi")),
+						CooldownDuration:            ptr.To(metav1.Duration{Duration: 3600}),
+					}),
+				},
+			}
+
+			pvca, err := testutils.CreatePersistentVolumeClaimAutoscaler(
+				parentCtx,
+				k8sClient,
+				"pvca-free-inodes-threshold-reached-with-selector",
+				targetRef,
+				volumePolicies,
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvca).NotTo(BeNil())
+
+			// Sample volume info metrics with free inodes less < 10%
+			volInfo := &metricssource.VolumeInfo{
+				AvailableBytes:  1024 * 1024 * 1024,
+				CapacityBytes:   1024 * 1024 * 1024,
+				AvailableInodes: 90,
+				CapacityInodes:  1000,
+			}
+
+			// Use a new event recorder so that we capture only the
+			// relevant events
+			eventRecorder := record.NewFakeRecorder(128)
+			withEventRecorderOpt := WithEventRecorder(eventRecorder)
+			runner, err := newRunner()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(runner).NotTo(BeNil())
+			withEventRecorderOpt(runner)
+
+			pvcs, err := runner.pvcFetcher.Fetch(parentCtx, pvca)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(pvcs).NotTo(BeEmpty())
+
+			ok, err := runner.shouldReconcilePVC(parentCtx, pvcs[0], pvca, metricssource.Metrics{
+				client.ObjectKeyFromObject(pvc): volInfo,
+			})
+			Expect(ok).To(BeTrue())
+			Expect(err).ToNot(HaveOccurred())
+
+			event := <-eventRecorder.Events
+			wantEvent := `Warning FreeInodesThresholdReached free inodes (9.00%) are less than the configured threshold (20.00%)`
+			Expect(event).To(Equal(wantEvent))
+		})
+
 	})
 
 	Context("enqueueObjects", func() {

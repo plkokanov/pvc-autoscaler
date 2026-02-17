@@ -7,6 +7,7 @@ package utils
 import (
 	"context"
 
+	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -76,6 +77,75 @@ func CreatePVC(ctx context.Context,
 	}
 
 	return pvc, nil
+}
+
+// CreateStatefulSet is a helper function used to create a test StatefulSet
+func CreateStatefulSet(ctx context.Context,
+	k8sClient client.Client,
+	pod *corev1.Pod,
+	pvc *corev1.PersistentVolumeClaim,
+	name string,
+	labels map[string]string) (*appsv1.StatefulSet, error) {
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    labels,
+		},
+		Spec: appsv1.StatefulSetSpec{
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: pod.ObjectMeta,
+				Spec:       pod.Spec,
+			},
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{
+				Spec: pvc.Spec,
+			}},
+		},
+	}
+
+	if err := k8sClient.Create(ctx, statefulSet); err != nil {
+		return nil, err
+	}
+	return statefulSet, nil
+}
+
+// CreatePod is a helper function used to create a test Pod
+func CreatePod(ctx context.Context,
+	k8sClient client.Client,
+	pvc *corev1.PersistentVolumeClaim,
+	name string,
+	labels map[string]string) (*corev1.Pod, error) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels:    labels,
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{Name: "test", Image: "test"},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "config",
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: pvc.Name,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if err := k8sClient.Create(ctx, pod); err != nil {
+		return nil, err
+	}
+
+	return pod, nil
 }
 
 // CreatePersistentVolumeClaimAutoscaler is a helper function used to create a

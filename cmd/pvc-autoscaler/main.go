@@ -28,6 +28,9 @@ import (
 	"github.com/gardener/pvc-autoscaler/internal/metrics/source"
 	"github.com/gardener/pvc-autoscaler/internal/metrics/source/prometheus"
 	"github.com/gardener/pvc-autoscaler/internal/periodic"
+	"github.com/gardener/pvc-autoscaler/internal/target"
+	"github.com/gardener/pvc-autoscaler/internal/target/pvcfetcher"
+	"github.com/gardener/pvc-autoscaler/internal/target/selectorfetcher"
 )
 
 var (
@@ -146,6 +149,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Setup the scale client for PVC fetching
+	scaleClient, restMapper, err := target.NewScaleClientWithDiscovery(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "unable to create scale client")
+		os.Exit(1)
+	}
+
+	selectorFetcher, err := selectorfetcher.New(
+		selectorfetcher.WithScaleClient(scaleClient),
+		selectorfetcher.WithRESTMapper(restMapper),
+	)
+	if err != nil {
+		setupLog.Error(err, "unable to create selector fetcher")
+		os.Exit(1)
+	}
+
+	pvcFetcher, err := pvcfetcher.New(
+		pvcfetcher.WithClient(mgr.GetClient()),
+		pvcfetcher.WithSelectorFetcher(selectorFetcher),
+	)
+	if err != nil {
+		setupLog.Error(err, "unable to create PVC fetcher")
+		os.Exit(1)
+	}
+
 	// Add the periodic runner
 	runner, err := periodic.New(
 		periodic.WithClient(mgr.GetClient()),
@@ -153,6 +181,7 @@ func main() {
 		periodic.WithEventChannel(eventCh),
 		periodic.WithMetricsSource(metricsSource),
 		periodic.WithEventRecorder(mgr.GetEventRecorderFor(common.ControllerName)),
+		periodic.WithPVCFetcher(pvcFetcher),
 	)
 
 	if err != nil {
